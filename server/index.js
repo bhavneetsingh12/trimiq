@@ -46,7 +46,12 @@ const LIMITS = {
     insightsPerDay: 1,
     deepPerDay: 0,
   },
-  paid: {
+  starter: {
+    chatPerDay: 10,
+    insightsPerDay: 3,
+    deepPerDay: 1,
+  },
+  pro: {
     chatPerDay: 30,
     insightsPerDay: 5,
     deepPerDay: 2,
@@ -60,9 +65,11 @@ const LIMITS = {
 
 function chooseModel(planTier, type) {
   if (type === "insight") return "gpt-4.1-nano";
-  if (type === "chat") return planTier === "paid" || planTier === "admin"
-    ? "gpt-5-mini"
-    : "gpt-4.1-mini";
+  if (type === "chat") {
+    return planTier === "pro" || planTier === "admin"
+      ? "gpt-5-mini"
+      : "gpt-4.1-mini";
+  }
   if (type === "deep") return "gpt-4.1-mini";
   return "gpt-4.1-mini";
 }
@@ -70,12 +77,24 @@ function chooseModel(planTier, type) {
 async function getProfile(userId) {
   const { data, error } = await supabaseAdmin
     .from("profiles")
-    .select("id,ai_beta_access,plan_tier")
+    .select("id,ai_beta_access")
     .eq("id", userId)
     .single();
 
   if (error) throw new Error(error.message);
   return data;
+}
+
+async function getEntitlements(userId) {
+  const { data, error } = await supabaseAdmin
+    .from("user_entitlements")
+    .select("plan, trial_ends_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) throw new Error(error.message);
+
+  return data || { plan: "free", trial_ends_at: null };
 }
 
 async function getTodayUsage(userId) {
@@ -122,20 +141,20 @@ async function bumpUsage(userId, type) {
   if (error) throw new Error(error.message);
 }
 
-function ensureAiAllowed(profile, usage, type) {
+function ensureAiAllowed(profile, ent, usage, type) {
   if (!AI_ENABLED) {
     const err = new Error("AI is temporarily disabled.");
     err.status = 503;
     throw err;
   }
 
-  if (!profile?.ai_beta_access && profile?.plan_tier !== "admin") {
+  if (!profile?.ai_beta_access) {
     const err = new Error("AI is currently in beta.");
     err.status = 403;
     throw err;
   }
 
-  const plan = profile?.plan_tier || "free";
+  const plan = ent?.plan || "free";
   const limits = LIMITS[plan] || LIMITS.free;
 
   if (type === "chat" && (usage.chat_count || 0) >= limits.chatPerDay) {
@@ -401,10 +420,13 @@ app.post("/ai/insights", async (req, res) => {
   try {
     const userId = req.userId;
     const profile = await getProfile(userId);
+const ent = await getEntitlements(userId);
 const usage = await getTodayUsage(userId);
-ensureAiAllowed(profile, usage, "insight");
 
-const model = chooseModel(profile.plan_tier, "insight");
+ensureAiAllowed(profile, ent, usage, "insight");
+
+const plan = ent?.plan || "free";
+const model = chooseModel(plan, "insight");
 
     const { data: subs, error: subsErr } = await supabaseAdmin
       .from("subscriptions")
@@ -578,10 +600,13 @@ app.post("/ai/chat", async (req, res) => {
   try {
     const userId = req.userId;
     const profile = await getProfile(userId);
-    const usage = await getTodayUsage(userId);
-    ensureAiAllowed(profile, usage, "chat");
+const ent = await getEntitlements(userId);
+const usage = await getTodayUsage(userId);
 
-    const model = chooseModel(profile.plan_tier, "chat");
+ensureAiAllowed(profile, ent, usage, "chat");
+
+const plan = ent?.plan || "free";
+const model = chooseModel(plan, "chat");
 
     const { message, conversation = [], financialContext = {} } = req.body;
 

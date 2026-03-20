@@ -1,22 +1,12 @@
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import { createClient } from "@supabase/supabase-js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config({ path: path.join(__dirname, ".env") });
-
-console.log(
-  "requireFeature.js SUPABASE_URL:",
-  JSON.stringify(process.env.SUPABASE_URL),
-);
-console.log(
-  "requireFeature.js SUPABASE_ANON_KEY:",
-  process.env.SUPABASE_ANON_KEY ? "SET" : "MISSING",
-);
-
-import { createClient } from "@supabase/supabase-js";
 
 const supabaseAdmin = createClient(
   process.env.SUPABASE_URL,
@@ -25,14 +15,15 @@ const supabaseAdmin = createClient(
 );
 
 if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  console.warn(
-    "⚠️ SUPABASE_SERVICE_ROLE_KEY missing — using ANON key (dev mode)",
-  );
+  console.warn("⚠️ SUPABASE_SERVICE_ROLE_KEY missing — using ANON key (dev mode)");
 }
 
 const FEATURE_MAP = {
-  export_excel: ["pro", "premium"],
-  ai_assistant: ["premium"],
+  export_excel: ["starter", "pro"],
+  ai_insights: ["starter", "pro"],
+  ai_chat: ["pro"],
+  alerts: ["pro"],
+  full_history: ["starter", "pro"],
 };
 
 export default function requireFeature(featureKey) {
@@ -41,7 +32,7 @@ export default function requireFeature(featureKey) {
 
     const { data, error } = await supabaseAdmin
       .from("user_entitlements")
-      .select("plan,trial_ends_at")
+      .select("plan, trial_ends_at")
       .eq("user_id", req.userId)
       .maybeSingle();
 
@@ -50,12 +41,13 @@ export default function requireFeature(featureKey) {
     const plan = data?.plan || "free";
     const allowed = FEATURE_MAP[featureKey] || [];
 
-    // allow trial if trial_ends_at in future (optional)
-    const now = new Date();
-    const inTrial = data?.trial_ends_at && new Date(data.trial_ends_at) > now;
+    const inTrial =
+      !!data?.trial_ends_at && new Date(data.trial_ends_at).getTime() > Date.now();
 
     if (!allowed.includes(plan) && !inTrial) {
-      return res.status(402).send("Upgrade required to export Excel.");
+      return res
+        .status(402)
+        .send(`Upgrade required to access ${featureKey.replace("_", " ")}.`);
     }
 
     next();
