@@ -77,12 +77,13 @@ function chooseModel(planTier, type) {
 async function getProfile(userId) {
   const { data, error } = await supabaseAdmin
     .from("profiles")
-    .select("id,ai_beta_access")
+    .select("id, ai_beta_access")
     .eq("id", userId)
-    .single();
+    .maybeSingle();
 
   if (error) throw new Error(error.message);
-  return data;
+
+  return data || { id: userId, ai_beta_access: false };
 }
 
 async function getEntitlements(userId) {
