@@ -1,12 +1,14 @@
-import { router, useLocalSearchParams } from "expo-router";
+import { useAppTheme } from "@/src/theme/useAppTheme";
+import { Stack, router, useLocalSearchParams } from "expo-router";
 import React, { useEffect, useMemo, useState } from "react";
 import {
-    ActivityIndicator,
-    Pressable,
-    ScrollView,
-    Text,
-    View,
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { supabase } from "../../src/lib/supabase";
 
 type SubRow = {
@@ -21,7 +23,7 @@ type SubRow = {
   confidence: number;
   merchant_key?: string | null;
   ignored?: boolean;
-  evidence?: any; // jsonb in supabase
+  evidence?: any;
 };
 
 type TxRow = {
@@ -39,55 +41,58 @@ function normalize(s: string) {
     .trim();
 }
 
-/** Cached cancel instructions (no OpenAI yet). Add more anytime. */
 function getCancelGuide(displayName: string) {
   const k = normalize(displayName);
 
   const guides: Record<string, string> = {
     NETFLIX: [
-      "Netflix cancel (typical):",
-      "1) Open Netflix (web is easiest).",
-      "2) Account → Membership & Billing → Cancel Membership.",
-      "3) Confirm cancellation. You can keep watching until billing period ends.",
+      "Netflix help:",
+      "1) Open Netflix in a browser.",
+      "2) Go to Account.",
+      "3) Open Membership & Billing.",
+      "4) Choose Cancel Membership and confirm.",
     ].join("\n"),
 
     SPOTIFY: [
-      "Spotify cancel (typical):",
-      "1) Open spotify.com (web).",
-      "2) Account → Your plan → Change plan.",
-      "3) Scroll down → Cancel Premium → Confirm.",
+      "Spotify help:",
+      "1) Open spotify.com in a browser.",
+      "2) Go to Account.",
+      "3) Open Your Plan.",
+      "4) Choose Change Plan, then cancel Premium.",
     ].join("\n"),
 
     APPLE: [
-      "Apple subscriptions cancel:",
-      "1) iPhone: Settings → Apple ID → Subscriptions.",
-      "2) Tap the subscription → Cancel Subscription.",
-      "OR",
-      "Mac: App Store → Account Settings → Subscriptions → Manage → Cancel.",
+      "Apple subscription help:",
+      "1) On iPhone: Settings → Apple ID → Subscriptions.",
+      "2) Select the subscription.",
+      "3) Choose Cancel Subscription.",
+      "Or on Mac: App Store → Account Settings → Subscriptions.",
     ].join("\n"),
 
     "LA FITNESS": [
-      "LA Fitness cancel (varies by state/club):",
-      "Common options: in-club cancellation or written cancellation form.",
-      "If you want, tell me your state and I’ll make this exact.",
+      "LA Fitness help:",
+      "Cancellation steps can vary by location and membership type.",
+      "A club visit or written request may be required.",
+      "If you want, we can make this more specific later by state.",
     ].join("\n"),
   };
 
-  // match “APPLE BILL”, “APPLE.COM/BILL” → APPLE, etc.
   if (k.includes("NETFLIX")) return guides.NETFLIX;
   if (k.includes("SPOTIFY")) return guides.SPOTIFY;
   if (k.includes("APPLE")) return guides.APPLE;
-  if (k.includes("LA FITNESS") || (k.includes("LA") && k.includes("FITNESS")))
+  if (k.includes("LA FITNESS") || (k.includes("LA") && k.includes("FITNESS"))) {
     return guides["LA FITNESS"];
+  }
 
   return [
-    "Cancel instructions (cached):",
-    "No guide saved for this merchant yet.",
-    "Tell me the exact merchant name and I’ll add a reusable guide for it.",
+    "Merchant help:",
+    "No saved help steps are available for this merchant yet.",
+    "You can still review the recent recurring charges below.",
   ].join("\n");
 }
 
 export default function SubscriptionDetail() {
+  const colors = useAppTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const idStr = useMemo(() => (Array.isArray(id) ? id[0] : id) ?? "", [id]);
 
@@ -109,13 +114,13 @@ export default function SubscriptionDetail() {
       setLoading(false);
       return;
     }
+
     if (!idStr) {
       setMsg("Missing subscription id.");
       setLoading(false);
       return;
     }
 
-    // 1) load subscription row
     const { data: subData, error: subErr } = await supabase
       .from("subscriptions")
       .select(
@@ -130,7 +135,6 @@ export default function SubscriptionDetail() {
       return;
     }
 
-    // safety: ensure it's the same user (RLS should already enforce)
     if ((subData as any).user_id !== userId) {
       setMsg("You don’t have access to this subscription.");
       setLoading(false);
@@ -140,7 +144,6 @@ export default function SubscriptionDetail() {
     const s = subData as SubRow;
     setSub(s);
 
-    // 2) load transactions and filter them
     const { data: txData, error: txErr } = await supabase
       .from("transactions")
       .select("date,name,amount,plaid_item_id")
@@ -156,11 +159,8 @@ export default function SubscriptionDetail() {
 
     const mkNorm = s.merchant_key ? normalize(s.merchant_key) : null;
 
-    // If we stored a representative plaid_item_id in evidence, use it
     const evidenceItemId =
-      s.evidence?.plaid_item_id ||
-      s.evidence?.recent?.[0]?.plaid_item_id ||
-      null;
+      s.evidence?.plaid_item_id || s.evidence?.recent?.[0]?.plaid_item_id || null;
 
     const dnNorm = normalize(s.display_name);
     const dnParts = dnNorm.split(" ").filter(Boolean).slice(0, 3);
@@ -168,20 +168,17 @@ export default function SubscriptionDetail() {
     const filtered = (txData ?? []).filter((t: any) => {
       const nameNorm = normalize(t.name);
 
-      // Best: exact merchant_key match
       if (mkNorm && nameNorm === mkNorm) {
-        // if item id known, optionally tighten it
-        if (evidenceItemId && t.plaid_item_id)
+        if (evidenceItemId && t.plaid_item_id) {
           return String(t.plaid_item_id) === String(evidenceItemId);
+        }
         return true;
       }
 
-      // If we know plaid_item_id, prioritize it
       if (evidenceItemId && t.plaid_item_id) {
         if (String(t.plaid_item_id) !== String(evidenceItemId)) return false;
       }
 
-      // fallback: all display-name parts appear in transaction name
       if (dnParts.length === 0) return false;
       return dnParts.every((p) => nameNorm.includes(p));
     });
@@ -192,129 +189,219 @@ export default function SubscriptionDetail() {
 
   useEffect(() => {
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idStr]);
 
   const setIgnored = async (ignored: boolean) => {
     if (!sub?.id) return;
+
     setMsg("");
+
     const { error } = await supabase
       .from("subscriptions")
       .update({ ignored })
       .eq("id", sub.id);
 
     if (error) {
-      setMsg((ignored ? "Ignore" : "Unignore") + " failed: " + error.message);
+      setMsg((ignored ? "Update" : "Restore") + " failed: " + error.message);
       return;
     }
 
-    setMsg(ignored ? "✅ Ignored (won’t show in list)." : "✅ Unignored.");
+    setMsg(ignored ? "Hidden from analysis." : "Restored to analysis.");
     await refresh();
   };
 
   return (
-    <ScrollView contentContainerStyle={{ padding: 20, gap: 12 }}>
+  <>
+    <Stack.Screen
+      options={{
+        headerShown: false,
+      }}
+    />
+
+    <SafeAreaView
+      style={{ flex: 1, backgroundColor: colors.background }}
+      edges={["top"]}
+      >
+        <ScrollView
+        style={{ flex: 1, backgroundColor: colors.background }}
+      contentContainerStyle={{ padding: 20, paddingTop:12, paddingBottom: 40 }}
+    >
       <Pressable
         onPress={() => router.back()}
         style={{
           alignSelf: "flex-start",
           paddingVertical: 10,
-          paddingHorizontal: 12,
-          borderRadius: 10,
+          paddingHorizontal: 14,
+          borderRadius: 14,
           borderWidth: 1,
-          borderColor: "#eee",
+          borderColor: colors.border,
+          backgroundColor: colors.surface,
+          marginBottom: 16,
         }}
       >
-        <Text>← Back</Text>
+        <Text
+          style={{
+            color: colors.text,
+            fontWeight: "600",
+          }}
+        >
+          ← Back
+        </Text>
       </Pressable>
 
       {loading ? (
         <View style={{ paddingTop: 30 }}>
-          <ActivityIndicator />
-          <Text style={{ marginTop: 10, opacity: 0.7 }}>Loading…</Text>
+          <ActivityIndicator color={colors.primaryDark} />
+          <Text
+            style={{
+              marginTop: 10,
+              color: colors.subtext,
+              fontSize: 15,
+            }}
+          >
+            Loading…
+          </Text>
         </View>
       ) : !sub ? (
         <View style={{ paddingTop: 10 }}>
-          <Text style={{ fontSize: 18, fontWeight: "800" }}>
+          <Text
+            style={{
+              fontSize: 22,
+              fontWeight: "800",
+              color: colors.text,
+            }}
+          >
             Subscription not found
           </Text>
-          {!!msg && <Text style={{ marginTop: 8 }}>{msg}</Text>}
+
+          {!!msg && (
+            <Text
+              style={{
+                marginTop: 8,
+                color: colors.subtext,
+              }}
+            >
+              {msg}
+            </Text>
+          )}
         </View>
       ) : (
         <>
-          <Text style={{ fontSize: 28, fontWeight: "800" }}>
+          <Text
+            style={{
+              fontSize: 30,
+              fontWeight: "800",
+              color: colors.text,
+              marginBottom: 14,
+            }}
+          >
             {sub.display_name}
           </Text>
 
           <View
             style={{
               borderWidth: 1,
-              borderColor: "#eee",
-              borderRadius: 12,
-              padding: 12,
-              gap: 6,
+              borderColor: colors.border,
+              backgroundColor: colors.surface,
+              borderRadius: 20,
+              padding: 18,
+              marginBottom: 14,
             }}
           >
-            <Text style={{ opacity: 0.75 }}>
-              Cadence: <Text style={{ fontWeight: "700" }}>{sub.cadence}</Text>
+            <Text
+              style={{
+                fontSize: 22,
+                fontWeight: "700",
+                color: colors.primaryDark,
+                marginBottom: 10,
+              }}
+            >
+              ${Number(sub.avg_amount ?? 0).toFixed(2)} {sub.cadence}
             </Text>
 
-            <Text style={{ opacity: 0.75 }}>
-              Avg amount:{" "}
-              <Text style={{ fontWeight: "700" }}>
-                ${Number(sub.avg_amount ?? 0).toFixed(2)}
-              </Text>
-            </Text>
-
-            <Text style={{ opacity: 0.75 }}>
+            <Text
+              style={{
+                color: colors.subtext,
+                fontSize: 15,
+                lineHeight: 22,
+                marginBottom: 4,
+              }}
+            >
               Last charge:{" "}
-              <Text style={{ fontWeight: "700" }}>{sub.last_charge_date}</Text>
-            </Text>
-
-            <Text style={{ opacity: 0.75 }}>
-              Charges:{" "}
-              <Text style={{ fontWeight: "700" }}>{sub.charge_count}</Text>
-            </Text>
-
-            <Text style={{ opacity: 0.75 }}>
-              Confidence:{" "}
-              <Text style={{ fontWeight: "700" }}>{sub.confidence}%</Text>
-            </Text>
-
-            {!!sub.merchant_key && (
-              <Text style={{ opacity: 0.6 }}>
-                merchant_key: {sub.merchant_key}
+              <Text style={{ color: colors.text, fontWeight: "700" }}>
+                {sub.last_charge_date}
               </Text>
-            )}
+            </Text>
+
+            <Text
+              style={{
+                color: colors.subtext,
+                fontSize: 15,
+                lineHeight: 22,
+                marginBottom: 4,
+              }}
+            >
+              Recurring charges detected:{" "}
+              <Text style={{ color: colors.text, fontWeight: "700" }}>
+                {sub.charge_count}
+              </Text>
+            </Text>
+
+            <Text
+              style={{
+                color: colors.subtext,
+                fontSize: 15,
+                lineHeight: 22,
+              }}
+            >
+              Detection confidence:{" "}
+              <Text style={{ color: colors.text, fontWeight: "700" }}>
+                {sub.confidence}%
+              </Text>
+            </Text>
           </View>
 
-          {/* Ignore / Unignore */}
           <Pressable
             onPress={() => setIgnored(!sub.ignored)}
             style={{
-              backgroundColor: "#111",
-              padding: 14,
-              borderRadius: 12,
-              marginTop: 4,
+              backgroundColor: colors.primaryDark,
+              padding: 16,
+              borderRadius: 16,
+              marginBottom: 12,
             }}
           >
-            <Text style={{ color: "white", textAlign: "center" }}>
-              {sub.ignored ? "Unignore" : "Ignore"} this subscription
+            <Text
+              style={{
+                color: "#FFFFFF",
+                textAlign: "center",
+                fontWeight: "700",
+                fontSize: 16,
+              }}
+            >
+              {sub.ignored ? "Restore to analysis" : "Hide from analysis"}
             </Text>
           </Pressable>
 
-          {/* Cancel instructions (cached) */}
           <Pressable
             onPress={() => setShowCancel((v) => !v)}
             style={{
               borderWidth: 1,
-              borderColor: "#eee",
-              padding: 14,
-              borderRadius: 12,
+              borderColor: colors.border,
+              backgroundColor: colors.surface,
+              padding: 16,
+              borderRadius: 16,
+              marginBottom: 12,
             }}
           >
-            <Text style={{ textAlign: "center", fontWeight: "700" }}>
-              {showCancel ? "Hide" : "Show"} cancel instructions
+            <Text
+              style={{
+                textAlign: "center",
+                fontWeight: "700",
+                fontSize: 16,
+                color: colors.text,
+              }}
+            >
+              {showCancel ? "Hide" : "View"} merchant help
             </Text>
           </Pressable>
 
@@ -322,24 +409,44 @@ export default function SubscriptionDetail() {
             <View
               style={{
                 borderWidth: 1,
-                borderColor: "#eee",
-                borderRadius: 12,
-                padding: 12,
+                borderColor: colors.border,
+                backgroundColor: colors.surface,
+                borderRadius: 18,
+                padding: 16,
+                marginBottom: 14,
               }}
             >
-              <Text style={{ whiteSpace: "pre-wrap" as any }}>
+              <Text
+                style={{
+                  color: colors.text,
+                  fontSize: 15,
+                  lineHeight: 24,
+                }}
+              >
                 {getCancelGuide(sub.display_name)}
               </Text>
             </View>
           )}
 
-          {/* Charge history */}
-          <Text style={{ fontWeight: "800", fontSize: 18, marginTop: 10 }}>
+          <Text
+            style={{
+              fontWeight: "800",
+              fontSize: 22,
+              color: colors.text,
+              marginTop: 8,
+              marginBottom: 12,
+            }}
+          >
             Charge history
           </Text>
 
           {txs.length === 0 ? (
-            <Text style={{ opacity: 0.7 }}>
+            <Text
+              style={{
+                color: colors.subtext,
+                fontSize: 15,
+              }}
+            >
               No matching transactions found yet.
             </Text>
           ) : (
@@ -348,23 +455,52 @@ export default function SubscriptionDetail() {
                 key={`${t.date}-${t.amount}-${idx}`}
                 style={{
                   borderWidth: 1,
-                  borderColor: "#eee",
-                  borderRadius: 12,
-                  padding: 12,
-                  marginBottom: 10,
+                  borderColor: colors.border,
+                  backgroundColor: colors.surface,
+                  borderRadius: 18,
+                  padding: 16,
+                  marginBottom: 12,
                 }}
               >
-                <Text style={{ fontWeight: "800" }}>{t.name}</Text>
-                <Text style={{ opacity: 0.75 }}>
+                <Text
+                  style={{
+                    fontWeight: "800",
+                    color: colors.text,
+                    fontSize: 16,
+                    marginBottom: 4,
+                  }}
+                >
+                  {t.name}
+                </Text>
+
+                <Text
+                  style={{
+                    color: colors.subtext,
+                    fontSize: 15,
+                    lineHeight: 22,
+                  }}
+                >
                   {t.date} • ${Number(t.amount ?? 0).toFixed(2)}
                 </Text>
               </View>
             ))
           )}
 
-          {!!msg && <Text style={{ marginTop: 10 }}>{msg}</Text>}
+          {!!msg && (
+            <Text
+              style={{
+                marginTop: 10,
+                color: colors.subtext,
+                fontSize: 14,
+              }}
+            >
+              {msg}
+            </Text>
+          )}
         </>
       )}
     </ScrollView>
-  );
+    </SafeAreaView>
+  </>
+);
 }

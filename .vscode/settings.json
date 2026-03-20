@@ -3,5 +3,13 @@
     "source.fixAll": "explicit",
     "source.organizeImports": "explicit",
     "source.sortMembers": "explicit"
+  },
+    "files.exclude": {
+    "**/._*": true,
+    "**/.__*": true
+  },
+  "search.exclude": {
+    "**/._*": true,
+    "**/.__*": true
   }
 }

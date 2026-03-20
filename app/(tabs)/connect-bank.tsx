@@ -1,19 +1,16 @@
+import { API_BASE, apiFetch } from "@/src/lib/api";
+import type { LinkExit, LinkSuccess } from "@/src/lib/plaid";
+import { useAppTheme } from "@/src/theme/useAppTheme";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
-import { Alert, Pressable, Text, View } from "react-native";
-import {
-  create,
-  destroy,
-  LinkExit,
-  LinkLogLevel,
-  LinkSuccess,
-  open,
-} from "react-native-plaid-link-sdk";
-
-const API_BASE = "http://10.0.2.2:3001"; // Android emulator -> your laptop localhost
+import React, { useEffect, useMemo, useState } from "react";
+import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import { create, destroy, open } from "../../src/lib/plaid";
 
 export default function ConnectBank() {
   const router = useRouter();
+  const colors = useAppTheme();
+  const styles = useMemo(() => createStyles(colors), [colors]);
+
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [opening, setOpening] = useState(false);
@@ -21,16 +18,24 @@ export default function ConnectBank() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/plaid/create_link_token`, {
+        const res = await apiFetch("/plaid/create_link_token", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
         });
 
-        const text = await res.text();
-        if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+        let json: any = null;
+        try {
+          json = await res.json();
+        } catch {
+          const text = await res.text();
+          if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+          throw new Error("Unexpected non-JSON response from server");
+        }
 
-        const json = JSON.parse(text);
-        if (!json?.link_token) throw new Error("No link_token returned");
+        if (!res.ok) {
+          throw new Error(json?.error || `HTTP ${res.status}`);
+        }
+
+        if (!json?.link_token) throw new Error("No link token returned");
 
         setLinkToken(json.link_token);
       } catch (e: any) {
@@ -50,36 +55,55 @@ export default function ConnectBank() {
     try {
       setOpening(true);
 
-      // Good practice when retrying multiple times
       await destroy();
-
-      // Step 1: preload Link
       create({ token: linkToken, noLoadingState: false });
 
-      // Step 2: open Link UI
       open({
         onSuccess: async (success: LinkSuccess) => {
           try {
-            const res = await fetch(`${API_BASE}/plaid/exchange_public_token`, {
+            const res = await apiFetch("/plaid/exchange_public_token", {
               method: "POST",
-              headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ public_token: success.publicToken }),
             });
 
             const text = await res.text();
-            if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+            if (!res.ok) {
+              if (res.status === 401) {
+                throw new Error(
+                  "Not logged in. Please sign in first so we can securely link your bank.",
+                );
+              }
+              throw new Error(text || `HTTP ${res.status}`);
+            }
 
-            Alert.alert("✅ Connected", "Access token saved on server.");
+            const syncRes = await apiFetch("/plaid/sync_all", {
+              method: "POST",
+              body: JSON.stringify({}),
+            });
+
+            const syncText = await syncRes.text();
+            if (!syncRes.ok) {
+              if (syncRes.status === 401) {
+                throw new Error(
+                  "Not logged in. Please sign in first so we can sync your transactions.",
+                );
+              }
+              throw new Error(syncText || `HTTP ${syncRes.status}`);
+            }
+
+            Alert.alert(
+              "Connected",
+              "Your bank was linked and your transactions were synced.",
+            );
             router.back();
           } catch (e: any) {
-            Alert.alert("Exchange failed", e?.message ?? "Unknown error");
+            Alert.alert("Link failed", e?.message ?? "Unknown error");
           }
         },
+
         onExit: (exit: LinkExit) => {
-          // user closed Plaid UI (or error)
           console.log("Plaid exit:", exit);
         },
-        logLevel: LinkLogLevel.ERROR,
       });
     } catch (e: any) {
       Alert.alert("Plaid error", e?.message ?? "Failed to open Plaid");
@@ -90,64 +114,147 @@ export default function ConnectBank() {
 
   if (loading) {
     return (
-      <View style={{ padding: 20 }}>
-        <Text>Preparing Plaid…</Text>
-        <Text style={{ marginTop: 8, opacity: 0.7 }}>
-          Contacting: {API_BASE}
+      <View style={styles.container}>
+        <Text style={styles.pageTitle}>Link your bank</Text>
+        <Text style={styles.pageSubtitle}>
+          Securely preparing your connection.
         </Text>
+
+        <View style={styles.infoCard}>
+          <Text style={styles.infoText}>Preparing Plaid…</Text>
+          <Text style={styles.metaText}>Server: {API_BASE}</Text>
+        </View>
       </View>
     );
   }
 
   if (!linkToken) {
     return (
-      <View style={{ padding: 20 }}>
-        <Text style={{ fontWeight: "700" }}>No link token</Text>
-        <Text style={{ marginTop: 8, opacity: 0.7 }}>
-          This usually means your server route /plaid/create_link_token is not
-          reachable from the emulator.
+      <View style={styles.container}>
+        <Text style={styles.pageTitle}>Link your bank</Text>
+        <Text style={styles.pageSubtitle}>
+          We could not start the secure bank connection.
         </Text>
 
-        <Pressable
-          onPress={() => router.back()}
-          style={{
-            marginTop: 14,
-            backgroundColor: "#111",
-            padding: 14,
-            borderRadius: 12,
-          }}
-        >
-          <Text style={{ color: "white", textAlign: "center" }}>Go Back</Text>
+        <View style={styles.infoCard}>
+          <Text style={styles.errorTitle}>No link token available</Text>
+          <Text style={styles.metaText}>
+            This usually means the server route
+            {" "}
+            /plaid/create_link_token
+            {" "}
+            is not reachable.
+          </Text>
+        </View>
+
+        <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
+          <Text style={styles.secondaryButtonText}>Maybe Later</Text>
         </Pressable>
       </View>
     );
   }
 
   return (
-    <View style={{ padding: 20, gap: 12 }}>
-      <Text style={{ fontSize: 24, fontWeight: "800" }}>Connect Bank</Text>
+    <View style={styles.container}>
+      <Text style={styles.pageTitle}>Link your bank</Text>
+      <Text style={styles.pageSubtitle}>
+        Securely connect an account to track spending, subscriptions, and savings opportunities.
+      </Text>
+
+      <View style={styles.infoCard}>
+        <Text style={styles.infoText}>Powered by Plaid secure bank linking.</Text>
+        <Text style={styles.metaText}>
+          Your transactions will sync after the connection is complete.
+        </Text>
+      </View>
 
       <Pressable
         onPress={openPlaid}
         disabled={opening}
-        style={{
-          backgroundColor: "#111",
-          padding: 14,
-          borderRadius: 12,
-          opacity: opening ? 0.6 : 1,
-        }}
+        style={[styles.primaryButton, opening && styles.primaryButtonDisabled]}
       >
-        <Text style={{ color: "white", textAlign: "center" }}>
-          {opening ? "Opening…" : "Open Plaid Link"}
+        <Text style={styles.primaryButtonText}>
+          {opening ? "Opening…" : "Link Bank Account"}
         </Text>
       </Pressable>
 
-      <Pressable
-        onPress={() => router.back()}
-        style={{ backgroundColor: "#111", padding: 14, borderRadius: 12 }}
-      >
-        <Text style={{ color: "white", textAlign: "center" }}>Go Back</Text>
+      <Pressable onPress={() => router.back()} style={styles.secondaryButton}>
+        <Text style={styles.secondaryButtonText}>Maybe Later</Text>
       </Pressable>
     </View>
   );
 }
+
+const createStyles = (colors: ReturnType<typeof useAppTheme>) =>
+  StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      padding: 24,
+    },
+    pageTitle: {
+      color: colors.text,
+      fontSize: 28,
+      fontWeight: "800",
+      marginBottom: 8,
+    },
+    pageSubtitle: {
+      color: colors.subtext,
+      fontSize: 15,
+      lineHeight: 22,
+      marginBottom: 20,
+    },
+    infoCard: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 18,
+      padding: 16,
+      marginBottom: 18,
+    },
+    infoText: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: "600",
+      marginBottom: 6,
+    },
+    metaText: {
+      color: colors.subtext,
+      fontSize: 14,
+      lineHeight: 20,
+    },
+    errorTitle: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: "800",
+      marginBottom: 6,
+    },
+    primaryButton: {
+      backgroundColor: colors.primaryDark,
+      paddingVertical: 16,
+      borderRadius: 16,
+      alignItems: "center",
+      marginBottom: 12,
+    },
+    primaryButtonDisabled: {
+      opacity: 0.6,
+    },
+    primaryButtonText: {
+      color: "#FFFFFF",
+      fontSize: 16,
+      fontWeight: "700",
+    },
+    secondaryButton: {
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingVertical: 16,
+      borderRadius: 16,
+      alignItems: "center",
+    },
+    secondaryButtonText: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: "700",
+    },
+  });

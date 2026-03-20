@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "trimiq",
-    "slug": "trimiq",
+    "name": "LedgerMind",
+    "slug": "ledgermind",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "trimiq",
+    "scheme": "ledgermind",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.bhavneet2486.trimiq",
+      "bundleIdentifier": "com.bhavneet2486.ledgermind",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -24,7 +24,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.bhavneet2486.trimiq"
+      "package": "com.bhavneet2486.ledgermind"
     },
     "web": {
       "output": "static",
@@ -47,7 +47,8 @@
     ],
     "experiments": {
       "typedRoutes": true,
-      "reactCompiler": true
+      "reactCompiler": true,
+      "tsconfigPaths": true
     },
     "extra": {
       "router": {},

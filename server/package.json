@@ -13,7 +13,9 @@
   "dependencies": {
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
+    "openai": "^6.29.0",
     "plaid": "^41.1.0"
   }
 }
